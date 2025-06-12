@@ -12,6 +12,8 @@ CACHE_DIR="$2"
 ENV_DIR="$3"
 STAGE="$(mktemp -d)"
 
+# --- APP_BASE Logic ---
+# This part isolates the specific application's code from the monorepo.
 if [ ! -f "${ENV_DIR}/APP_BASE" ]; then
     echo "APP_BASE was not set. Aborting" | indent
     exit 1
@@ -19,9 +21,46 @@ fi
 APP_BASE="$(cat "${ENV_DIR}/APP_BASE")"
 
 (
-    mv "${BUILD_DIR}/${APP_BASE}" "${STAGE}" &&
+    # Move the app-specific code to a temporary staging area.
+    # The rest of the monorepo remains in BUILD_DIR for now.
+    mv "${BUILD_DIR}/${APP_BASE}" "${STAGE}"
+)
+if [ $? -ne 0 ]; then
+    echo "FAILED to stage directory ${APP_BASE}" | indent
+    exit 1
+fi
+
+# --- Shared Folder Logic ---
+# This new section handles the optional shared resources folder.
+# It runs only if the environment variable is set and the folder exists.
+if [ -f "${ENV_DIR}/SHARED_FOLDER_NAME" ]; then
+    SHARED_FOLDER_NAME="$(cat "${ENV_DIR}/SHARED_FOLDER_NAME")"
+    SHARED_FOLDER_PATH="${BUILD_DIR}/${SHARED_FOLDER_NAME}"
+
+    # Check if the shared folder actually exists in the original monorepo checkout.
+    if [ -d "${SHARED_FOLDER_PATH}" ]; then
+        echo "Shared folder '${SHARED_FOLDER_NAME}' found. Copying to app root." | indent
+        # Copy the shared folder into the staged application directory.
+        cp -a "${SHARED_FOLDER_PATH}" "${STAGE}/$(basename "$APP_BASE")/"
+        if [ $? -ne 0 ]; then
+            echo "FAILED to copy shared folder" | indent
+            exit 1
+        fi
+        echo "Copied ${SHARED_FOLDER_NAME} successfully" | indent
+    else
+        echo "SHARED_FOLDER_NAME was set to '${SHARED_FOLDER_NAME}', but directory not found. Skipping." | indent
+    fi
+else
+    echo "SHARED_FOLDER_NAME not set. Skipping shared folder copy." | indent
+fi
+
+# --- Finalize Build Directory ---
+# This part cleans the build directory and moves the final code (app + shared folder) into place.
+(
+    # Clear the original monorepo code from the build directory.
     rm -rf "${BUILD_DIR}"/* &&
-    mv "${STAGE}/$(basename "$APP_BASE")"/* "${BUILD_DIR}"
+        # Move the staged contents into the final build directory.
+        mv "${STAGE}/$(basename "$APP_BASE")"/* "${BUILD_DIR}"
 )
 
 if [ $? -ne 0 ]; then
@@ -30,4 +69,3 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Copied ${APP_BASE} to root of app successfully" | indent
-
